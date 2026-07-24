@@ -1,0 +1,4 @@
+# rootDir（src/）配下のうち、GASソースのみをpush対象にする
+**/**
+!appsscript.json
+!*.gs

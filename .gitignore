@@ -1,0 +1,6 @@
+# scriptIdの実値を含むためコミットしない（.clasp.json.example を参照）
+.clasp.json
+
+node_modules/
+.env
+.env.*
