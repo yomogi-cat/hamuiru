@@ -56,16 +56,20 @@ function collectPower() {
 }
 
 /**
- * 【トリガー: 毎朝10時】当日0:00以降のログを走査して生存判定する。
+ * 【トリガー: 毎朝】当日0:00以降のログを走査して生存判定する。
  * - ログ0件            → システム異常としてLINE通知（回線断・停電・GAS障害の切り分け文言付き）
  * - 使用形跡なし        → 見守りアラートをLINE通知（①電話 → ②訪問の手順文言付き）
  * - 使用形跡あり        → 何もしない（正常時は静かに）
+ *
+ * 判定時刻はトリガー設定側で決める（観察期間のログから決定する）。通知文の時間帯は
+ * 実行時刻から生成するため、トリガー時刻を変えてもコードの修正は不要。
  */
 function morningCheck() {
   try {
     const config = getConfig_();
     // スクリプトのタイムゾーンは Asia/Tokyo のため、当日0:00 = JSTの0:00になる
-    const todayStart = new Date();
+    const now = new Date();
+    const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
 
     const todayRows = getLogRows_().filter((row) => row[0] >= todayStart);
@@ -81,7 +85,9 @@ function morningCheck() {
 
     const used = todayRows.some((row) => Number(row[1]) >= config.powerThreshold);
     if (!used) {
-      pushLine_('🔔【見守りアラート】今朝はまだ電気ポットの使用が確認できていません（0:00〜10:00）。\n' +
+      const nowLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
+      pushLine_('🔔【見守りアラート】今朝はまだ' + config.applianceName +
+        'の使用が確認できていません（0:00〜' + nowLabel + '）。\n' +
         '念のため様子を確認してください。\n' +
         '対応手順: ①まず電話をかける → ②30分以内に連絡がつかなければ訪問する');
     }
@@ -107,7 +113,7 @@ function weeklySummary() {
     );
 
     pushLine_('📋【週次レポート】この1週間、7日中 ' + usedDays.size + '日 で' +
-      'ポットの使用を確認しました。見守りシステムは正常に稼働しています。');
+      config.applianceName + 'の使用を確認しました。見守りシステムは正常に稼働しています。');
 
     pruneOldRows_();
   } catch (err) {

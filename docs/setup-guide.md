@@ -6,21 +6,23 @@ SwitchBotプラグミニ + GAS + LINE Messaging API による「異常時のみL
 
 ```
 [祖母宅]
-電気ポット ─ SwitchBotプラグミニ ─ Wi-Fi（楽天SIM + L11ルーター）
-                                        │
+見守り対象の家電 ─ SwitchBotプラグミニ ─ Wi-Fi（楽天SIM + L11ルーター）
+（例: テレビ）                              │
                                  SwitchBotクラウド
                                         │ (API v1.1)
 [クラウド・無料]                         │
 Google Apps Script ──毎30分── 電力値を取得しスプレッドシートに記録
         │
-        ├─ 毎朝10:00: 当日の使用形跡チェック → なければアラート
+        ├─ 毎朝（観察期間で決めた時刻）: 当日の使用形跡チェック → なければアラート
         └─ 毎週日曜20:00: 週次サマリー
                 │
                 ▼ (LINE Messaging API push)
 [家族LINEグループ]  母・叔母・孫 全員に同時通知
 ```
 
-**設計方針**: 正常時は静かに。異常時（朝までにポット未使用）のみアラート。週1回だけ生存サマリーを流してシステム自体の死活も家族が確認できるようにする。
+**設計方針**: 正常時は静かに。異常時（朝までに対象家電が未使用）のみアラート。週1回だけ生存サマリーを流してシステム自体の死活も家族が確認できるようにする。
+
+**最重要**: どの家電を見守り対象にするかで精度がほぼ決まる。選定条件と向かない家電は [README の「シグナルは本人の生活スタイルから選ぶ」](../README.md#シグナルは本人の生活スタイルから選ぶ) を必ず先に読むこと。この手順書では**テレビ**を対象にした場合を前提に進める。
 
 **月間コスト**: 0円（LINE無料枠 月200通のうち使用は月5〜10通程度 / GAS・スプレッドシート無料）
 
@@ -37,16 +39,19 @@ Google Apps Script ──毎30分── 電力値を取得しスプレッドシ�
 
 ## Phase 1: プラグ設置とアプリ設定（設置当日・約30分）
 
+0. **見守り対象の家電を決める**（現地に行く前に）。本人が毎日必ず使い、季節に左右されず、使わないこと自体が異常のサインになる家電を選ぶ。長時間つけっぱなしになる家電（テレビなど）が最適で、短時間しか稼働しない家電（電気ポット・電子レンジ）は30分ごとの観測で取りこぼすため避ける
 1. 自分のスマホに **SwitchBotアプリ** をインストールし、アカウント作成
-2. 祖母宅で、**電気ポット**（または毎日必ず使う家電）のコンセントにプラグミニを挟む
+2. 祖母宅で、**対象家電**（例: テレビ）のコンセントにプラグミニを挟む
 3. アプリ →「＋」→ プラグミニを追加 → 祖母宅のWi-Fiに接続
    - ⚠️ **2.4GHz帯のみ対応**。L11のSSIDが5GHz/2.4GHz分離されている場合は2.4GHz側を選ぶ
-4. 動作確認: ポットで湯を沸かし、アプリの電力表示が跳ね上がる（ポットなら700〜1300W）ことを確認
+4. 動作確認: 対象家電をオンにし、アプリの電力表示が跳ね上がることを確認
+   - このとき **オフ時（待機電力）とオン時の両方のW数を必ずメモする**。しきい値決定の材料になる
+   - 目安: 液晶テレビなら待機0.5W前後 / 使用60W前後、電気ポットなら保温30〜40W / 湯沸かし700〜1300W
 5. **つなぎの通知設定**（Phase 4完成までの暫定運用）:
-   - アプリのオートメーションで「電力が 500W を超えたら → スマホにプッシュ通知」を作成
-   - これだけで「今朝ポットが使われた」が毎日わかる状態になる
+   - アプリのオートメーションで「電力が（待機とオンの中間W）を超えたら → スマホにプッシュ通知」を作成
+   - これだけで「今朝その家電が使われた」が毎日わかる状態になる
 
-> メモ: しきい値はポットの実測値に合わせて調整。保温時は数十W、湯沸かし時に大電力になるので、その中間（例: 500W）に設定する。
+> メモ: しきい値は**待機時とオン時の実測値の中間**に置く。待機電力の2〜3倍以上が目安。テレビなら20W前後、電気ポットなら500W前後になる。ここで決めるのは暫定値で、最終値はPhase 6の観察期間のログから決める。
 
 ---
 
@@ -80,7 +85,7 @@ Google Apps Script ──毎30分── 電力値を取得しスプレッドシ�
 1. [Googleスプレッドシート](https://sheets.new) を新規作成。名前: `見守りログ`
 2. シート名を `log` に変更し、1行目に見出し: `timestamp` / `power_w` / `daily_kwh`
 3. 拡張機能 → Apps Script を開く
-4. 後述のコードを `コード.gs` に全量貼り付け
+4. コードを反映する（下記 4-2）
 5. プロジェクトの設定（歯車アイコン）→ **スクリプトプロパティ** に以下を登録:
 
 | プロパティ名 | 値 |
@@ -90,161 +95,31 @@ Google Apps Script ──毎30分── 電力値を取得しスプレッドシ�
 | `LINE_TOKEN` | Phase 3のチャネルアクセストークン |
 | `PLUG_DEVICE_ID` | （4-3で取得後に登録） |
 | `LINE_GROUP_ID` | （Phase 5でWebhook受信時に自動登録される） |
-| `POWER_THRESHOLD` | `500`（W。ポットの湯沸かし判定しきい値） |
+| `POWER_THRESHOLD` | Phase 1-4でメモした実測値の中間（テレビなら `20`）。**必須**。最終値はPhase 6の観察期間で確定させる |
+| `APPLIANCE_NAME` | 通知文に出す家電名（例: `テレビ`）。省略時は `家電` |
 
-### 4-2. コード全量
+> `POWER_THRESHOLD` はデフォルト値を持たない必須プロパティです。未設定だと全ジョブが起動直後にエラーで止まります（生活に合っていないしきい値のまま静かに動き続けるのを防ぐため、意図的にそうしています）。
 
-```javascript
-// ============================================================
-// 見守りシステム: SwitchBotプラグミニ + LINE Messaging API
-// ============================================================
-const PROPS = PropertiesService.getScriptProperties();
-const SB_BASE = 'https://api.switch-bot.com/v1.1';
+### 4-2. コードの反映
 
-// ---------- SwitchBot API v1.1 認証ヘッダー ----------
-function sbHeaders_() {
-  const token = PROPS.getProperty('SWITCHBOT_TOKEN');
-  const secret = PROPS.getProperty('SWITCHBOT_SECRET');
-  const t = Date.now().toString();
-  const nonce = Utilities.getUuid();
-  const raw = token + t + nonce;
-  const sigBytes = Utilities.computeHmacSha256Signature(raw, secret);
-  const sign = Utilities.base64Encode(sigBytes).toUpperCase();
-  return {
-    'Authorization': token,
-    'sign': sign,
-    't': t,
-    'nonce': nonce,
-    'Content-Type': 'application/json'
-  };
-}
+コードの実体は本リポジトリの `src/` にあります。この手順書にコードを転記すると二重管理になり、片方が古くなるため、以下のいずれかで反映してください。
 
-// ---------- 初回のみ実行: デバイスID取得 ----------
-function listDevices() {
-  const res = UrlFetchApp.fetch(SB_BASE + '/devices', { headers: sbHeaders_() });
-  const body = JSON.parse(res.getContentText());
-  body.body.deviceList.forEach(d =>
-    Logger.log(`${d.deviceName} | ${d.deviceType} | ${d.deviceId}`));
-  // → 表示された Plug Mini の deviceId をスクリプトプロパティ
-  //   PLUG_DEVICE_ID に登録する
-}
+**方法A: clasp（推奨）**
 
-// ---------- 毎30分: 電力値を記録 ----------
-function collectPower() {
-  const deviceId = PROPS.getProperty('PLUG_DEVICE_ID');
-  const res = UrlFetchApp.fetch(
-    `${SB_BASE}/devices/${deviceId}/status`, { headers: sbHeaders_() });
-  const body = JSON.parse(res.getContentText()).body;
-  // プラグミニ: weight = 現在の負荷電力(W), electricityOfDay = 当日累計(分単位表記の機種差あり)
-  const sheet = SpreadsheetApp.getActive().getSheetByName('log');
-  sheet.appendRow([new Date(), body.weight, body.electricityOfDay || '']);
-}
+[README の「clasp でのデプロイ手順」](../README.md#clasp-でのデプロイ手順) に従い、`clasp push` で `src/` 配下をまとめて反映します。
 
-// ---------- 毎朝10:00: 生存判定 ----------
-function morningCheck() {
-  const threshold = Number(PROPS.getProperty('POWER_THRESHOLD') || 500);
-  const sheet = SpreadsheetApp.getActive().getSheetByName('log');
-  const today0 = new Date();
-  today0.setHours(0, 0, 0, 0);
+**方法B: 手でコピーする**
 
-  const rows = sheet.getDataRange().getValues().slice(1); // 見出し除外
-  const todayRows = rows.filter(r => r[0] instanceof Date && r[0] >= today0);
+GASエディタでファイルを4つ作り、`src/` の同名ファイルの内容をそれぞれ貼り付けます。
 
-  // ケース1: 記録自体がない → システム側の異常
-  if (todayRows.length === 0) {
-    pushLine_('⚠️【システム異常】今日の電力データが取得できていません。' +
-      'Wi-Fiルーターかプラグの電源、GASのエラーを確認してください。');
-    return;
-  }
-  // ケース2: 記録はあるが使用形跡がない → 本来のアラート
-  const used = todayRows.some(r => Number(r[1]) >= threshold);
-  if (!used) {
-    pushLine_('🔔【見守りアラート】今朝はまだ電気ポットの使用が確認できていません' +
-      '（0:00〜10:00）。念のため連絡してみてください。\n' +
-      '手順: ①母さんが電話 → ②30分以内に連絡つかなければ訪問');
-  }
-  // 使用形跡あり → 静かに何もしない（正常）
-}
+| GASエディタ上のファイル名 | コピー元 | 役割 |
+|---|---|---|
+| `config.gs` | `src/config.gs` | スクリプトプロパティのアクセサと検証 |
+| `switchbot.gs` | `src/switchbot.gs` | SwitchBot API v1.1（署名認証・リトライ） |
+| `line.gs` | `src/line.gs` | LINE push送信 / Webhook受信 / テスト送信 |
+| `jobs.gs` | `src/jobs.gs` | トリガージョブ3種 |
 
-// ---------- 毎週日曜20:00: 週次サマリー ----------
-function weeklySummary() {
-  const threshold = Number(PROPS.getProperty('POWER_THRESHOLD') || 500);
-  const sheet = SpreadsheetApp.getActive().getSheetByName('log');
-  const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const rows = sheet.getDataRange().getValues().slice(1)
-    .filter(r => r[0] instanceof Date && r[0] >= from);
-
-  const days = new Set(
-    rows.filter(r => Number(r[1]) >= threshold)
-        .map(r => Utilities.formatDate(r[0], 'Asia/Tokyo', 'MM/dd')));
-
-  pushLine_(`📋【週次レポート】この1週間、7日中 ${days.size}日 で` +
-    `ポットの使用を確認しました。システムは正常稼働中です。`);
-
-  // ログの肥大化防止: 30日より古い行を削除
-  pruneOldRows_(sheet, 30);
-}
-
-function pruneOldRows_(sheet, keepDays) {
-  const limit = new Date(Date.now() - keepDays * 24 * 60 * 60 * 1000);
-  const values = sheet.getDataRange().getValues();
-  let deleteCount = 0;
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][0] instanceof Date && values[i][0] < limit) deleteCount++;
-    else break; // 時系列順なので最初の新しい行で打ち切り
-  }
-  if (deleteCount > 0) sheet.deleteRows(2, deleteCount);
-}
-
-// ---------- LINE push（グループ宛て） ----------
-function pushLine_(text) {
-  const groupId = PROPS.getProperty('LINE_GROUP_ID');
-  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
-    method: 'post',
-    headers: { 'Authorization': 'Bearer ' + PROPS.getProperty('LINE_TOKEN') },
-    contentType: 'application/json',
-    payload: JSON.stringify({
-      to: groupId,
-      messages: [{ type: 'text', text: text }]
-    }),
-    muteHttpExceptions: true
-  });
-}
-
-// ---------- Webhook受信: groupId自動登録 ----------
-// Webアプリとしてデプロイし、URLをLINE DevelopersのWebhook URLに設定。
-// botをグループに招待し、グループで誰かが発言すると、groupId が
-// スクリプトプロパティ LINE_GROUP_ID に自動登録される（未設定のときのみ）。
-function doPost(e) {
-  try {
-    if (!e || !e.postData) {
-      console.log('doPost: リクエストデータがありません（エディタからの手動実行では動作確認できません）');
-    } else {
-      const data = JSON.parse(e.postData.contents);
-      (data.events || []).forEach(ev => {
-        if (ev.source && ev.source.groupId) {
-          const current = (PROPS.getProperty('LINE_GROUP_ID') || '').trim();
-          if (current === '') {
-            PROPS.setProperty('LINE_GROUP_ID', ev.source.groupId);
-            console.log('groupId: ' + ev.source.groupId + ' を LINE_GROUP_ID に自動登録しました');
-          } else {
-            console.log('groupId: ' + ev.source.groupId + '（LINE_GROUP_ID は登録済みのため変更なし）');
-          }
-        }
-      });
-    }
-  } catch (err) {
-    console.log('parse error: ' + err);
-  }
-  return ContentService.createTextOutput(JSON.stringify({ status: 'ok' }))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ---------- 動作テスト用 ----------
-function testLine() {
-  pushLine_('✅ テスト通知です。見守りシステムのセットアップ中。');
-}
-```
+初期状態の `コード.gs` は削除して構いません。マニフェスト（`appsscript.json`）はタイムゾーンを `Asia/Tokyo` に設定してください（エディタの「プロジェクトの設定 → `appsscript.json` マニフェストファイルをエディタで表示する」で編集できます）。
 
 ### 4-3. デバイスID取得
 
@@ -270,21 +145,50 @@ function testLine() {
 
 ---
 
-## Phase 6: トリガー設定（5分）
+## Phase 6: 観察期間（1〜2週間・通知なしで実データを溜める）
 
-GASエディタ → 左メニュー「トリガー」→ 以下3件を追加:
+**ここで一気に3トリガーを登録して運用を始めないこと。** `POWER_THRESHOLD` と `morningCheck` の判定時刻は、机上の想定ではなく祖母の実際の生活ログから決めます。
+
+GASエディタ → 左メニュー「トリガー」→ **`collectPower` だけ**を追加:
 
 | 関数 | 種類 | タイミング |
 |---|---|---|
-| `collectPower` | 時間主導型 | **30分ごと** |
-| `morningCheck` | 時間主導型・日付ベース | **午前10〜11時** |
-| `weeklySummary` | 時間主導型・週ベース | **日曜 20〜21時** |
+| `collectPower` | 時間主導型 | **30分ごと**（短時間稼働の家電を選んだ場合は10分ごと） |
+
+この状態で1〜2週間放置します。`morningCheck` を登録していないので通知は一切飛びません。
+
+### 観察期間のログから決める3つのこと
+
+`log` シートを開いて、次を読み取ります。
+
+| 読み取るもの | 決まる設定 | 見方 |
+|---|---|---|
+| オン時と待機時の `power_w` | `POWER_THRESHOLD` | 2つの値の中間。待機電力の2〜3倍以上を目安に |
+| 最も遅かった日の初回使用時刻 | `morningCheck` の判定時刻 | その時刻に**1時間の余裕**を足す |
+| **1日も使わなかった日があるか** | （家電の選定そのもの） | あればその家電は不適格。Phase 1に戻って選び直す |
+
+3つ目が最も重要です。**観察期間は、しきい値の決定だけでなく「その家電を選んだ判断が正しかったか」の検証も兼ねています。** 観察期間中に1日でも使わない日があれば、本運用でも同じ日が来て誤報になります。素直に対象家電を変えてください。
 
 ---
 
-## 運用開始チェックリスト
+## Phase 7: 本運用開始（5分）
 
-- [ ] ポット湯沸かし時にスプレッドシートの `power_w` がしきい値(500W)を超えている
+1. 観察期間で決めた値を `POWER_THRESHOLD` に登録し直す
+2. トリガーを2件追加する
+
+| 関数 | 種類 | タイミング |
+|---|---|---|
+| `morningCheck` | 時間主導型・日付ベース | **観察期間で決めた時刻**（初期値の目安は午前10〜11時） |
+| `weeklySummary` | 時間主導型・週ベース | **日曜 20〜21時** |
+
+判定時刻を変えても、通知文の時間帯表記は実行時刻から自動生成されるためコード修正は不要です。
+
+### 運用開始チェックリスト
+
+- [ ] 観察期間のログで、対象家電を使わなかった日が**1日もなかった**
+- [ ] 対象家電のオン時に `power_w` が `POWER_THRESHOLD` を超えている
+- [ ] `POWER_THRESHOLD` を観察期間の実測値で登録し直した
+- [ ] `APPLIANCE_NAME` に対象家電の名前（例: `テレビ`）を登録した
 - [ ] `testLine` でグループ全員に通知が届いた
 - [ ] しきい値未満の状態で `morningCheck` を手動実行し、アラートが届くことを確認
 - [ ] 家族グループに「アラートが来たら ①母が電話 → ②連絡つかなければ訪問」の申し合わせを固定メッセージ（アナウンス）にしておく
@@ -302,7 +206,9 @@ GASエディタ → 左メニュー「トリガー」→ 以下3件を追加:
 | APIが `Device internal error` | プラグがオフラインの可能性。祖母宅ルーターの再起動 |
 | `LINE_GROUP_ID` が自動登録されない / doPostが実行されない | ①LINE Developersの「Webhookの利用」トグルがOFF ②アカウント設定の「グループ参加を許可」がOFF（ONにしてbotを招待し直す）③Webhook URLが古いデプロイや無効なURL。`curl -L -H 'Content-Type: application/json' -d '{"events":[]}' <URL>` で `{"status":"ok"}` が返るか確認（⚠️ `-X POST` は付けない。リダイレクト先にもPOSTしてしまい、正常でも404ページが返って見える）④コード修正後は「デプロイを管理 → 編集 → 新バージョン」で反映するとURLを変えずに済む |
 | LINE通知が届かない | チャネルアクセストークンの再発行で旧トークンが失効していないか / 無料枠(月200通)超過がないか |
-| 毎朝アラートが誤報になる | しきい値が高すぎる。ポット湯沸かし時の実測Wに合わせて`POWER_THRESHOLD`を下げる。または祖母様の生活時間に合わせ`morningCheck`の時刻を後ろ倒し |
+| 全ジョブが `スクリプトプロパティが未設定です: POWER_THRESHOLD` で止まる | 仕様どおりの挙動。`POWER_THRESHOLD` はデフォルト値を持たない必須プロパティ。観察期間のログから決めた値を登録する |
+| `POWER_THRESHOLD には正の数（W）を設定してください` | 値に単位（`20W`）や全角数字が混入している。半角の数値のみを入れる |
+| 毎朝アラートが誤報になる | ①しきい値が高すぎる → オン時の実測Wに合わせて `POWER_THRESHOLD` を下げる ②判定時刻が早すぎる → `morningCheck` の時刻を後ろ倒し ③**そもそも対象家電が「毎日必ず使う」ものではない** → 最も根本的な原因。ログで使用しなかった日を確認し、家電を選び直す |
 | 停電・回線断が心配 | `morningCheck`の「ケース1（データなし）」がシステム異常として検知する。アラート文言どおりルーターとプラグの電源を確認 |
 
 ---
