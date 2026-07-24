@@ -89,7 +89,7 @@ Google Apps Script ──毎30分── 電力値を取得しスプレッドシ�
 | `SWITCHBOT_SECRET` | Phase 2のシークレット |
 | `LINE_TOKEN` | Phase 3のチャネルアクセストークン |
 | `PLUG_DEVICE_ID` | （4-3で取得後に登録） |
-| `LINE_GROUP_ID` | （Phase 5で取得後に登録） |
+| `LINE_GROUP_ID` | （Phase 5でWebhook受信時に自動登録される） |
 | `POWER_THRESHOLD` | `500`（W。ポットの湯沸かし判定しきい値） |
 
 ### 4-2. コード全量
@@ -211,18 +211,28 @@ function pushLine_(text) {
   });
 }
 
-// ---------- Webhook受信: groupId取得用 ----------
+// ---------- Webhook受信: groupId自動登録 ----------
 // Webアプリとしてデプロイし、URLをLINE DevelopersのWebhook URLに設定。
-// botをグループに招待するか、グループで誰かが発言すると
-// ログ（実行数 → doPost のログ）に groupId が出力される。
+// botをグループに招待し、グループで誰かが発言すると、groupId が
+// スクリプトプロパティ LINE_GROUP_ID に自動登録される（未設定のときのみ）。
 function doPost(e) {
   try {
-    const data = JSON.parse(e.postData.contents);
-    (data.events || []).forEach(ev => {
-      if (ev.source && ev.source.groupId) {
-        console.log('groupId: ' + ev.source.groupId);
-      }
-    });
+    if (!e || !e.postData) {
+      console.log('doPost: リクエストデータがありません（エディタからの手動実行では動作確認できません）');
+    } else {
+      const data = JSON.parse(e.postData.contents);
+      (data.events || []).forEach(ev => {
+        if (ev.source && ev.source.groupId) {
+          const current = (PROPS.getProperty('LINE_GROUP_ID') || '').trim();
+          if (current === '') {
+            PROPS.setProperty('LINE_GROUP_ID', ev.source.groupId);
+            console.log('groupId: ' + ev.source.groupId + ' を LINE_GROUP_ID に自動登録しました');
+          } else {
+            console.log('groupId: ' + ev.source.groupId + '（LINE_GROUP_ID は登録済みのため変更なし）');
+          }
+        }
+      });
+    }
   } catch (err) {
     console.log('parse error: ' + err);
   }
@@ -253,10 +263,10 @@ function testLine() {
 3. LINEアプリで家族グループを作成（母・叔母・自分などを招待）
 4. グループに **botアカウント（みまもりくん）を招待**
 5. グループで誰かが適当に1回発言する
-6. GASエディタ → 左メニュー「実行数」→ `doPost` の実行ログを開き、`groupId: Cxxxx...` を確認
-7. その値をスクリプトプロパティ `LINE_GROUP_ID` に登録
-8. `testLine` を実行 → **グループにテスト通知が届けば成功** 🎉
-9. （任意）groupId取得後、Webhookは不要なら LINE Developers 側でOFFにしてよい
+6. プロジェクトの設定（歯車）→ スクリプトプロパティを開き、`LINE_GROUP_ID` に `Cxxxx...` が**自動登録**されていることを確認
+   - 登録されていない場合は、左メニュー「実行数」→ `doPost` の実行ログでエラーの有無を確認（実行行をクリックするとその場で下に展開される。ログが空の実行は検証リクエスト等）
+7. `testLine` を実行 → **グループにテスト通知が届けば成功** 🎉
+8. （任意）groupId取得後、Webhookは不要なら LINE Developers 側でOFFにしてよい
 
 ---
 
@@ -290,7 +300,7 @@ GASエディタ → 左メニュー「トリガー」→ 以下3件を追加:
 | プラグがWi-Fiに繋がらない | 5GHz帯に繋ごうとしている。2.4GHz SSIDを選ぶ |
 | SwitchBot APIが401/403 | sign生成の問題。トークン/シークレットの前後の空白混入を確認 |
 | APIが `Device internal error` | プラグがオフラインの可能性。祖母宅ルーターの再起動 |
-| doPostのログにgroupIdが出ない | ①アカウント設定の「グループ参加を許可」がOFF ②Webhook URLが古いデプロイ（デプロイし直したらURLが変わる点に注意） |
+| `LINE_GROUP_ID` が自動登録されない / doPostが実行されない | ①アカウント設定の「グループ参加を許可」がOFF（ONにしてbotを招待し直す）②Webhook URLが古いデプロイや無効なURL。`curl -L -X POST -d '{"events":[]}' <URL>` で `{"status":"ok"}` が返るか確認（404はデプロイが存在しない）③コード修正後は「デプロイを管理 → 編集 → 新バージョン」で反映するとURLを変えずに済む |
 | LINE通知が届かない | チャネルアクセストークンの再発行で旧トークンが失効していないか / 無料枠(月200通)超過がないか |
 | 毎朝アラートが誤報になる | しきい値が高すぎる。ポット湯沸かし時の実測Wに合わせて`POWER_THRESHOLD`を下げる。または祖母様の生活時間に合わせ`morningCheck`の時刻を後ろ倒し |
 | 停電・回線断が心配 | `morningCheck`の「ケース1（データなし）」がシステム異常として検知する。アラート文言どおりルーターとプラグの電源を確認 |
