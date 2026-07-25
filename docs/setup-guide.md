@@ -112,11 +112,13 @@ Google Apps Script ──毎10分── 電力値を取得しスプレッドシ�
 
 **方法A: clasp（推奨）**
 
-[README の「clasp でのデプロイ手順」](../README.md#clasp-でのデプロイ手順) に従い、`clasp push` で `src/` 配下をまとめて反映します。
+[README の「clasp でのデプロイ手順」](../README.md#clasp-でのデプロイ手順) に従い、`clasp push` で `src/` 配下をまとめて反映します。`appsscript.json` も一緒に反映されるので、タイムゾーンとWebアプリの公開設定を手で入れる必要がありません。
+
+> ⚠️ `clasp push` の前に [Apps Script API を有効化](https://script.google.com/home/usersettings) してください。OFFのままだと権限エラーで失敗します。
 
 **方法B: 手でコピーする**
 
-GASエディタでファイルを4つ作り、`src/` の同名ファイルの内容をそれぞれ貼り付けます。
+GASエディタでファイルを5つ作り、`src/` の同名ファイルの内容をそれぞれ貼り付けます。
 
 | GASエディタ上のファイル名 | コピー元 | 役割 |
 |---|---|---|
@@ -124,8 +126,9 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 | `switchbot.gs` | `src/switchbot.gs` | SwitchBot API v1.1（署名認証・リトライ） |
 | `line.gs` | `src/line.gs` | LINE push送信 / Webhook受信 / テスト送信 |
 | `jobs.gs` | `src/jobs.gs` | トリガージョブ3種 |
+| `setup.gs` | `src/setup.gs` | トリガー登録などのセットアップ用関数 |
 
-初期状態の `コード.gs` は削除して構いません。マニフェスト（`appsscript.json`）はタイムゾーンを `Asia/Tokyo` に設定してください（エディタの「プロジェクトの設定 → `appsscript.json` マニフェストファイルをエディタで表示する」で編集できます）。
+初期状態の `コード.gs` は削除して構いません。マニフェスト（`appsscript.json`）は `src/appsscript.json` の内容に合わせてください（エディタの「プロジェクトの設定 → `appsscript.json` マニフェストファイルをエディタで表示する」で編集できます）。タイムゾーン `Asia/Tokyo` と `webapp` セクションの両方が必要です。
 
 ### 4-3. デバイスID取得
 
@@ -137,9 +140,9 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 
 ## Phase 5: LINEグループ作成と groupId 取得（15分）
 
-1. GASエディタ → **デプロイ → 新しいデプロイ → ウェブアプリ**
-   - 実行ユーザー: 自分 / アクセスできるユーザー: **全員**
-   - 発行された URL を控える
+1. Webアプリとしてデプロイし、発行された URL を控える
+   - **clasp の場合**: `clasp deploy` を実行するだけ。実行ユーザーとアクセス権は `src/appsscript.json` の `webapp` セクション（`USER_DEPLOYING` / `ANYONE_ANONYMOUS`）で設定済み
+   - **エディタの場合**: **デプロイ → 新しいデプロイ → ウェブアプリ**を選び、実行ユーザー: 自分 / アクセスできるユーザー: **全員**
 2. LINE Developers → Messaging API設定 → **Webhook URL** に貼り付け → 検証 → 「Webhookの利用」ON
 3. LINEアプリで家族グループを作成（母・叔母・自分などを招待）
 4. グループに **botアカウント（みまもりくん）を招待**
@@ -157,11 +160,10 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 
 1. スクリプトプロパティに **`OBSERVATION_MODE` = `true`** を登録します
    - `collectPower` は朝の使用確認通知も担当するため、このフラグがないと暫定しきい値のまま通知が飛びます
-2. GASエディタ → 左メニュー「トリガー」→ **`collectPower` だけ**を追加します
-
-| 関数 | 種類 | タイミング |
-|---|---|---|
-| `collectPower` | 時間主導型 | **10分ごと** |
+2. GASエディタで **`setupObservationTriggers` を選択して実行**します
+   - `collectPower`（10分ごと）だけが登録されます
+   - `OBSERVATION_MODE` が `true` でない場合は実行を拒否してエラーになります（付け忘れ防止）
+   - トリガーをUIで手作業しないのは、間隔や時刻の設定ミスを防ぐためです
 
 この状態で1〜2週間放置します。`OBSERVATION_MODE` が `true` なので通知は一切飛びません。
 
@@ -188,14 +190,21 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 
 1. 観察期間で決めた値を `POWER_THRESHOLD` / `NOTIFY_FROM_HOUR` / `NOTIFY_TO_HOUR` に登録します
 2. **`OBSERVATION_MODE` を削除（または `false` に）します** ← これを忘れると通知が一切飛びません
-3. トリガーを2件追加します
+3. GASエディタで **`setupTriggers` を選択して実行**します
 
-| 関数 | 種類 | タイミング |
-|---|---|---|
-| `morningCheck` | 時間主導型・日付ベース | **`NOTIFY_TO_HOUR` と同じ時刻**（初期値の目安は午前10〜11時） |
-| `weeklySummary` | 時間主導型・週ベース | **日曜 20〜21時** |
+これだけで3件のトリガーが登録されます。
 
-判定時刻を変えても、通知文の時間帯表記は実行時刻から自動生成されるためコード修正は不要です。
+| 関数 | タイミング |
+|---|---|
+| `collectPower` | 10分ごと |
+| `morningCheck` | 毎日 **`NOTIFY_TO_HOUR` 時台**（自動追従） |
+| `weeklySummary` | 毎週日曜 20時台 |
+
+`morningCheck` の時刻は `NOTIFY_TO_HOUR` から自動で決まるので、手で揃える必要はありません。`OBSERVATION_MODE` が残っている場合は実行を拒否してエラーになります（外し忘れ防止）。
+
+実行ログに登録内容と「朝の通知は何時〜何時に届く」かが出るので、意図した設定になっているか確認してください。何度実行しても重複登録されません。
+
+やり直したいときは `deleteAllTriggers`、現状を見たいときは `showTriggers` を実行します。
 
 ### 運用開始チェックリスト
 
@@ -203,8 +212,8 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 - [ ] 対象家電のオン時に `power_w` が `POWER_THRESHOLD` を超えている
 - [ ] `POWER_THRESHOLD` を観察期間の実測値で登録し直した
 - [ ] `NOTIFY_FROM_HOUR` / `NOTIFY_TO_HOUR` を観察期間のログから決めて登録した
-- [ ] `morningCheck` のトリガー時刻を `NOTIFY_TO_HOUR` と揃えた
-- [ ] **`OBSERVATION_MODE` を外した**
+- [ ] **`OBSERVATION_MODE` を外した**（外し忘れていると `setupTriggers` がエラーで教えてくれる）
+- [ ] `setupTriggers` を実行し、実行ログの登録内容が意図通りだった
 - [ ] `APPLIANCE_NAME` に対象家電の名前（例: `テレビ`）を登録した
 - [ ] `testLine` でグループ全員に通知が届いた
 - [ ] 通知時間帯の中で対象家電をオンにし、**朝の使用確認通知が届くことを確認**した
@@ -227,7 +236,10 @@ GASエディタでファイルを4つ作り、`src/` の同名ファイルの内
 | LINE通知が届かない | チャネルアクセストークンの再発行で旧トークンが失効していないか / 無料枠(月200通)超過がないか |
 | 全ジョブが `スクリプトプロパティが未設定です: POWER_THRESHOLD` で止まる | 仕様どおりの挙動。`POWER_THRESHOLD` はデフォルト値を持たない必須プロパティ。観察期間のログから決めた値を登録する |
 | `POWER_THRESHOLD には正の数（W）を設定してください` | 値に単位（`20W`）や全角数字が混入している。半角の数値のみを入れる |
-| **通知が一切来ない**（ログは溜まっている） | `OBSERVATION_MODE` が `true` のまま。Phase 7の手順2で削除する |
+| **通知が一切来ない**（ログは溜まっている） | `OBSERVATION_MODE` が `true` のまま。Phase 7の手順2で削除し、`setupTriggers` を実行し直す |
+| `clasp push` が権限エラー | [Apps Script API](https://script.google.com/home/usersettings) がOFF。ONにして再実行する |
+| `clasp deploy` したWebアプリが403を返す | `src/appsscript.json` の `webapp` セクションが反映されていない。`clasp push` を先に実行してからデプロイし直す |
+| トリガーが二重に登録されている | `deleteAllTriggers` を実行してから `setupTriggers` をやり直す（通常は自動で重複排除される） |
 | 朝の使用確認通知が来ない | ①`OBSERVATION_MODE` が残っている ②起床が `NOTIFY_FROM_HOUR` より早く、通知対象外の時間帯に使用が終わっている ③しきい値が高すぎてオン時に超えていない。`log` シートで実際の時刻と `power_w` を確認する |
 | 朝の通知が同じ日に何度も来る | `LAST_ON_NOTIFIED_DATE` が更新できていない可能性。スクリプトプロパティを確認する（通常は送信成功時に自動更新される） |
 | 深夜に通知が来る | `NOTIFY_FROM_HOUR` が小さすぎる。ログで実際の起床時刻を確認して上げる |

@@ -151,7 +151,7 @@ flowchart TD
 # 1. clasp をインストール
 npm i -g @google/clasp
 
-# 2. Googleアカウントでログイン
+# 2. Googleアカウントでログイン（ブラウザ認証。WSL等では --no-localhost を付ける）
 clasp login
 
 # 3. .clasp.json を作成（scriptId を自分のものに書き換える）
@@ -161,29 +161,50 @@ cp .clasp.json.example .clasp.json
 
 # 4. src/ 配下をGASへ反映
 clasp push
+
+# 5. Webアプリとしてデプロイ（LINE Webhook用。doPost を公開する）
+clasp deploy
 ```
 
 `.clasp.json` は scriptId の実値を含むため `.gitignore` でコミット対象外にしています。
 
+**`clasp push` の前に [Apps Script API を有効化](https://script.google.com/home/usersettings) してください。** OFFのままだと push が権限エラーで失敗します。
+
+Webアプリの公開設定（実行ユーザー・アクセス権）は `src/appsscript.json` の `webapp` セクションで管理しているため、`clasp deploy` だけでLINE Webhookから叩ける状態になります。
+
+### clasp でできない作業
+
+| 作業 | 方法 |
+|---|---|
+| スクリプトプロパティの登録 | GASエディタの「プロジェクトの設定」でのみ可能 |
+| トリガー登録 | `setupObservationTriggers` / `setupTriggers` をエディタから手動実行（下記） |
+| `listDevices` などの実行 | GASエディタから手動実行 |
+
 ## トリガー設定
 
-GASエディタの「トリガー」から時間主導型で登録します。**観察期間中は `collectPower` のみ**登録し、残り2件は本運用開始時に追加します。
+トリガーはUIで手作業せず、`src/setup.gs` の関数をGASエディタから**手動実行**して登録します。時刻の設定ミスを防ぐためです。
 
-| 関数 | 種類 | タイミング | 登録時期 |
-|---|---|---|---|
-| `collectPower` | 時間主導型 | 10分ごと | 観察期間から |
-| `morningCheck` | 時間主導型・日付ベース | 毎日 `NOTIFY_TO_HOUR` と同じ時刻（初期値 午前10〜11時。**観察期間の結果で調整**） | 本運用開始時 |
-| `weeklySummary` | 時間主導型・週ベース | 日曜 20〜21時 | 本運用開始時 |
+| 実行する関数 | タイミング | 登録されるトリガー |
+|---|---|---|
+| `setupObservationTriggers` | 観察期間の開始時 | `collectPower`（10分ごと）のみ |
+| `setupTriggers` | 本運用の開始時 | `collectPower`（10分ごと）／`morningCheck`（毎日 `NOTIFY_TO_HOUR` 時台）／`weeklySummary`（日曜20時台） |
 
-`morningCheck` の時刻を変えたときは、通知文の時間帯表記は実行時刻から自動生成されるため、コードの修正は不要です。ただし `NOTIFY_TO_HOUR` も同じ時刻に揃えてください。
+確認・やり直しには `showTriggers`（一覧表示）と `deleteAllTriggers`（全削除）を使います。何度実行しても重複登録されません（既存トリガーを削除してから登録します）。
+
+この方式にしている理由は3つあります。
+
+- **`morningCheck` の時刻を `NOTIFY_TO_HOUR` から自動で決める** — この2つがずれると「朝の通知も来ないがアラートも出ない」空白時間が生じます。手で揃えさせるのではなくコードで保証しています
+- **`OBSERVATION_MODE` の付け外し忘れを防ぐ** — `setupObservationTriggers` はフラグが `true` でないと、`setupTriggers` は `true` のままだと、それぞれ実行を拒否します
+- **設定不備をセットアップ時点で発見する** — どちらも先に `getConfig_()` を呼ぶため、プロパティの不足は「10分ごとのエラー通知」ではなく実行時のエラーとして分かります
 
 ## ファイル構成
 
 ```
 src/
-├── appsscript.json   # GASマニフェスト（Asia/Tokyo, V8）
+├── appsscript.json   # GASマニフェスト（Asia/Tokyo, V8, Webアプリ公開設定）
 ├── config.gs         # スクリプトプロパティのアクセサと検証
 ├── switchbot.gs      # SwitchBot API v1.1（署名認証・リトライ・状態取得）
 ├── line.gs           # LINE push送信 / Webhook受信(groupId取得) / テスト送信
-└── jobs.gs           # トリガージョブ3種（記録+朝の使用確認通知・不在アラート・週次サマリー）
+├── jobs.gs           # トリガージョブ3種（記録+朝の使用確認通知・不在アラート・週次サマリー）
+└── setup.gs          # セットアップ用ワンショット関数（トリガー登録・確認・削除）
 ```

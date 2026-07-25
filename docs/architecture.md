@@ -144,6 +144,27 @@ sequenceDiagram
 
 トリガーを登録しないことで通知を止める方式にはしていない。`collectPower` は観察期間中も回し続ける必要があるためである。
 
+## デプロイとトリガー登録
+
+コードの反映は `clasp push`、Webアプリの公開は `clasp deploy` で行う。Webアプリの実行ユーザーとアクセス権は `appsscript.json` の `webapp` セクション（`USER_DEPLOYING` / `ANYONE_ANONYMOUS`）で管理しており、エディタUIでの設定を不要にしている。
+
+一方でトリガー登録は clasp では行えない。UIでの手作業に頼ると設定ミスが起きるため、`setup.gs` に登録用の関数を置き、エディタから手動実行する運用にしている。
+
+| 関数 | 用途 |
+|---|---|
+| `setupObservationTriggers` | 観察期間用。`collectPower` のみ登録。`OBSERVATION_MODE` が `true` でなければ実行を拒否する |
+| `setupTriggers` | 本運用用。3件を登録。`OBSERVATION_MODE` が `true` なら実行を拒否する |
+| `showTriggers` | 登録済みトリガーの一覧表示 |
+| `deleteAllTriggers` | このプロジェクトのトリガーを全削除 |
+
+この方式にしている理由は3つある。
+
+1. **`morningCheck` の時刻を `NOTIFY_TO_HOUR` から導出できる** — 前述の「揃えないと空白時間が生じる」制約を、手作業ではなくコードで保証する
+2. **`OBSERVATION_MODE` の付け外し忘れを構造的に防げる** — 両関数がフラグの状態を検査して実行を拒否する
+3. **設定不備をセットアップ時点で発見できる** — 両関数が先に `getConfig_()` を呼ぶ。プロパティ不足を実行時に見つけると、`notifyJobError_` が10分ごとにLINE通知を送り続けてしまう
+
+いずれの関数も既存トリガーを削除してから登録するため、何度実行しても重複しない。
+
 ## データ保持
 
 `log` シートは30日分のみ保持し、`weeklySummary` 実行時に30日より古い行を先頭から削除する。判定に必要なのは当日分（morningCheck）と直近7日分（weeklySummary）のみなので、30日あれば障害調査にも十分な余裕がある。
