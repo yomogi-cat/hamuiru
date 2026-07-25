@@ -84,7 +84,8 @@ Google Apps Script ──毎10分── 電力値を取得しスプレッドシ�
 ### 4-1. プロジェクト準備
 
 1. [Googleスプレッドシート](https://sheets.new) を新規作成。名前: `見守りログ`
-2. シート名を `log` に変更し、1行目に見出し: `timestamp` / `power_w` / `daily_kwh`
+2. シート名を `log` に変更し、1行目に見出し: `timestamp` / `power_w` / `electricity_of_day`
+   - 判定に使うのは `timestamp` と `power_w` だけです。`electricity_of_day` は SwitchBot API の生値で、**値の意味が特定できていないため判定には使っていません**（日付をまたがずにリセットすることがあり、単位も不明）
 3. 拡張機能 → Apps Script を開く
 4. コードを反映する（下記 4-2）
 5. プロジェクトの設定（歯車アイコン）→ **スクリプトプロパティ** に以下を登録:

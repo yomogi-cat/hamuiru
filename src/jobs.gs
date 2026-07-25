@@ -38,14 +38,15 @@ function getLogSheet_() {
   let sheet = spreadsheet.getSheetByName(LOG_SHEET_NAME_);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(LOG_SHEET_NAME_);
-    sheet.appendRow(['timestamp', 'power_w', 'daily_kwh']);
+    sheet.appendRow(['timestamp', 'power_w', 'electricity_of_day']);
   }
   return sheet;
 }
 
 /**
  * ログの全データ行（見出し除外）を返す。
- * @return {Array<Array>} [timestamp: Date, power_w: number, daily_kwh: number][]
+ * 判定に使うのは timestamp と power_w のみ。3列目は参考値（下記コメント参照）。
+ * @return {Array<Array>} [timestamp: Date, power_w: number, electricity_of_day: number][]
  */
 function getLogRows_() {
   const sheet = getLogSheet_();

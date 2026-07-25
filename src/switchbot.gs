@@ -81,7 +81,16 @@ function listDevices() {
 /**
  * プラグミニの現在状態を取得する。
  * SwitchBot APIはHTTP 200でもボディ内 statusCode で失敗を返すため、100以外は例外にする。
- * @return {{weight: number, electricityOfDay: number}} weight=現在の負荷電力(W)、electricityOfDay=当日累計電力量
+ *
+ * electricityOfDay は値の意味が特定できていないため、判定には一切使わず
+ * ログに参考値として記録するだけにしている。実測で確認した挙動:
+ *   - 日付をまたがずに減少（リセット）することがある（例: 10:09 に 379 → 50）
+ *   - 単位が不明。「分」とすると経過時間を超えて増加し、「kWh / Wh」とすると
+ *     同時刻の power_w と桁が合わない
+ * この列を根拠に判定を組んではいけない。
+ *
+ * @return {{weight: number, electricityOfDay: number}}
+ *   weight=現在の負荷電力(W)、electricityOfDay=APIの生値（意味未特定・判定には使わない）
  */
 function getPlugStatus_() {
   const config = getConfig_();
