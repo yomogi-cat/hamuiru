@@ -212,6 +212,28 @@ sequenceDiagram
 
 いずれの関数も既存トリガーを削除してから登録するため、何度実行しても重複しない。
 
+## 通知文の生成を1か所に集約している理由
+
+通知の文面は `jobs.gs` の `build*Message_` 系関数に集約し、本番のジョブと
+`sendSampleNotifications`（スクリーンショット用のサンプル送信）の両方から呼んでいる。
+
+| 関数 | 通知 |
+|---|---|
+| `buildFirstUseMessage_` | 朝の使用確認 |
+| `buildOnAllNightMessage_` | 夜通しつけっぱなし |
+| `buildWatchAlertMessage_` | 見守りアラート |
+| `buildSystemAnomalyMessage_` | システム異常 |
+| `buildWeeklySummaryMessage_` | 週次サマリー |
+| `buildStateChangeMessage_` | 試作運用のON/OFF |
+
+サンプル側に文面をコピーで持つと、通知文を変更したときに片方だけが古くなる。
+ドキュメントや記事に載せたスクリーンショットが実物とずれると、読者を誤らせるうえに
+気づく手段がない。生成関数を共用することで構造的に防いでいる。
+
+`sendSampleNotifications` は `ALLOW_SAMPLE_NOTIFICATIONS=true` がなければ実行を拒否する。
+「見守りアラート」など家族を不安にさせる文面を含むため、誤爆を防ぐために明示的な
+オプトインを必須としている。
+
 ## 設定値の再調整
 
 `POWER_THRESHOLD` / `NOTIFY_FROM_HOUR` / `NOTIFY_TO_HOUR` と対象家電の選定は、その人のその時点の生活に紐づいた値であり、恒久的な設定ではない。季節による起床時刻の変化、生活リズムの変化（入院・同居家族の増減）、家電の買い替え、習慣の変化があれば再調整が必要になる。

@@ -130,6 +130,58 @@ function notifyPowerIfNeeded_(config, powerW, now) {
   notifyFirstUseIfNeeded_(config, powerW, now);
 }
 
+// ---------------------------------------------------------------------------
+// 通知文の生成
+// 本番のジョブと、スクショ用のサンプル送信（line.gs の sendSampleNotifications）の
+// 両方から呼ぶ。文面を1か所にまとめておくことで、記事やドキュメントに載せた
+// スクリーンショットが実際に届く通知とずれないようにしている。
+// ---------------------------------------------------------------------------
+
+/** 朝の使用確認（本命の通知） */
+function buildFirstUseMessage_(applianceName, timeLabel) {
+  return '☀️ 今朝 ' + timeLabel + ' に' + applianceName + 'の使用を確認しました。';
+}
+
+/** 夜通しつけっぱなしだった日（朝の使用確認の差し替え） */
+function buildOnAllNightMessage_(applianceName, timeLabel) {
+  return '🌙 今朝 ' + timeLabel + ' の時点で' + applianceName +
+    'がついていました（昨夜から消されていません）。\n' +
+    '消さずに寝た可能性がありますが、念のため様子を確認してください。\n' +
+    '※この日は起床の確認ができていません。';
+}
+
+/** 見守りアラート（セーフティネット） */
+function buildWatchAlertMessage_(applianceName, nowLabel) {
+  return '🔔【見守りアラート】今朝は' + applianceName +
+    'の使用を確認できませんでした（0:00〜' + nowLabel + '）。\n' +
+    '朝の使用確認の通知も届いていません。\n' +
+    '念のため様子を確認してください。\n' +
+    '対応手順: ①まず電話をかける → ②30分以内に連絡がつかなければ訪問する';
+}
+
+/** システム異常（当日のデータが1件もない） */
+function buildSystemAnomalyMessage_() {
+  return '⚠️【システム異常】今日の電力データが1件も記録できていません。\n' +
+    '見守り判定ができない状態です。次を確認してください:\n' +
+    '① 祖母宅のWi-Fiルーターとプラグの電源（回線断・停電の可能性）\n' +
+    '② SwitchBotアプリでプラグがオンラインか\n' +
+    '③ GASエディタの実行ログにエラーが出ていないか';
+}
+
+/** 週次サマリー */
+function buildWeeklySummaryMessage_(applianceName, usedDayCount) {
+  return '📋【週次レポート】この1週間、7日中 ' + usedDayCount + '日 で' +
+    applianceName + 'の使用を確認しました。見守りシステムは正常に稼働しています。';
+}
+
+/** 試作運用のON/OFF通知 */
+function buildStateChangeMessage_(applianceName, timeLabel, isOn, powerW) {
+  return isOn
+    ? '🔌 ' + timeLabel + ' ' + applianceName + 'がONになりました（' +
+      Math.round(powerW) + 'W）'
+    : '⚫ ' + timeLabel + ' ' + applianceName + 'がOFFになりました';
+}
+
 /**
  * 【試作運用モード】ON/OFFが切り替わったタイミングで都度通知する。
  *
@@ -155,12 +207,7 @@ function notifyStateChangeIfNeeded_(config, powerW, now) {
   }
 
   const timeLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
-  if (current === 'on') {
-    pushLine_('🔌 ' + timeLabel + ' ' + config.applianceName + 'がONになりました（' +
-      Math.round(powerW) + 'W）');
-  } else {
-    pushLine_('⚫ ' + timeLabel + ' ' + config.applianceName + 'がOFFになりました');
-  }
+  pushLine_(buildStateChangeMessage_(config.applianceName, timeLabel, current === 'on', powerW));
 }
 
 /**
@@ -220,11 +267,8 @@ function notifyFirstUseIfNeeded_(config, powerW, now) {
 
   const timeLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
   const message = wasOnAllNight_(config, now)
-    ? '🌙 今朝 ' + timeLabel + ' の時点で' + config.applianceName +
-      'がついていました（昨夜から消されていません）。\n' +
-      '消さずに寝た可能性がありますが、念のため様子を確認してください。\n' +
-      '※この日は起床の確認ができていません。'
-    : '☀️ 今朝 ' + timeLabel + ' に' + config.applianceName + 'の使用を確認しました。';
+    ? buildOnAllNightMessage_(config.applianceName, timeLabel)
+    : buildFirstUseMessage_(config.applianceName, timeLabel);
 
   const sent = pushLine_(message);
   if (sent) {
@@ -261,22 +305,14 @@ function morningCheck() {
     const todayRows = getLogRows_().filter((row) => row[0] >= todayStart);
 
     if (todayRows.length === 0) {
-      pushLine_('⚠️【システム異常】今日の電力データが1件も記録できていません。\n' +
-        '見守り判定ができない状態です。次を確認してください:\n' +
-        '① 祖母宅のWi-Fiルーターとプラグの電源（回線断・停電の可能性）\n' +
-        '② SwitchBotアプリでプラグがオンラインか\n' +
-        '③ GASエディタの実行ログにエラーが出ていないか');
+      pushLine_(buildSystemAnomalyMessage_());
       return;
     }
 
     const used = todayRows.some((row) => Number(row[1]) >= config.powerThreshold);
     if (!used) {
       const nowLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
-      pushLine_('🔔【見守りアラート】今朝は' + config.applianceName +
-        'の使用を確認できませんでした（0:00〜' + nowLabel + '）。\n' +
-        '朝の使用確認の通知も届いていません。\n' +
-        '念のため様子を確認してください。\n' +
-        '対応手順: ①まず電話をかける → ②30分以内に連絡がつかなければ訪問する');
+      pushLine_(buildWatchAlertMessage_(config.applianceName, nowLabel));
     }
     // 使用形跡あり: 正常のため通知しない
   } catch (err) {
@@ -304,8 +340,7 @@ function weeklySummary() {
         .map((row) => Utilities.formatDate(row[0], 'Asia/Tokyo', 'yyyy-MM-dd'))
     );
 
-    pushLine_('📋【週次レポート】この1週間、7日中 ' + usedDays.size + '日 で' +
-      config.applianceName + 'の使用を確認しました。見守りシステムは正常に稼働しています。');
+    pushLine_(buildWeeklySummaryMessage_(config.applianceName, usedDays.size));
 
     pruneOldRows_();
   } catch (err) {

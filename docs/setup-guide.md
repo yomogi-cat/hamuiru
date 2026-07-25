@@ -103,6 +103,7 @@ Google Apps Script ──毎10分── 電力値を取得しスプレッドシ�
 | `NOTIFY_TO_HOUR` | 同・終了。この時刻以降の使用では通知しません。省略時 `11` |
 | `OBSERVATION_MODE` | Phase 6の観察期間中は `true` にします。全通知が止まりログ収集だけになります |
 | `TRIAL_MODE` | Phase 7の試作運用中は `true` にします。ON/OFFを都度通知します |
+| `ALLOW_SAMPLE_NOTIFICATIONS` | `sendSampleNotifications`（スクショ用のサンプル送信）を使うときだけ `true` にします。撮影後は削除します |
 
 > `POWER_THRESHOLD` はデフォルト値を持たない必須プロパティです。未設定だと全ジョブが起動直後にエラーで止まります（生活に合っていないしきい値のまま静かに動き続けるのを防ぐため、意図的にそうしています）。
 
