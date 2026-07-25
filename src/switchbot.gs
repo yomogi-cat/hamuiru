@@ -1,5 +1,5 @@
 // switchbot.gs: SwitchBot API v1.1 との通信（HMAC-SHA256署名認証・リトライ付きfetch）。
-// プラグミニの現在電力値・当日累計電力量の取得を担当する。
+// プラグミニの現在電力値の取得を担当する。
 
 const SWITCHBOT_BASE_URL_ = 'https://api.switch-bot.com/v1.1';
 
