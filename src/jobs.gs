@@ -1,8 +1,14 @@
-// jobs.gs: トリガーから実行される3ジョブ（電力記録・朝の生存判定・週次サマリー）。
+// jobs.gs: トリガーから実行される3ジョブ（電力記録+朝の使用確認通知・不在アラート・週次サマリー）。
 // 想定外エラーはLINEに概要を通知する（ただしLINE送信自体の失敗はログのみ）。
 
 const LOG_SHEET_NAME_ = 'log';
 const LOG_KEEP_DAYS_ = 30;
+
+/**
+ * 朝の使用確認通知を送った日付（yyyy-MM-dd）を記録するスクリプトプロパティ名。
+ * 手で設定するものではなく、スクリプトが自動で書き込む。
+ */
+const LAST_ON_NOTIFIED_KEY_ = 'LAST_ON_NOTIFIED_DATE';
 
 /**
  * ログ用シートを取得する。存在しなければ見出し行付きで作成する。
@@ -44,22 +50,56 @@ function notifyJobError_(jobName, err) {
 }
 
 /**
- * 【トリガー: 30分ごと】プラグの電力値を取得し、シート log に追記する。
+ * 【トリガー: 10分ごと】プラグの電力値を取得してシート log に追記し、
+ * 朝の時間帯に初めて使用を確認したら家族へ1通通知する。
  */
 function collectPower() {
   try {
+    const config = getConfig_();
     const status = getPlugStatus_();
-    getLogSheet_().appendRow([new Date(), status.weight, status.electricityOfDay]);
+    const now = new Date();
+    getLogSheet_().appendRow([now, status.weight, status.electricityOfDay]);
+    notifyFirstUseIfNeeded_(config, status.weight, now);
   } catch (err) {
     notifyJobError_('collectPower（電力記録）', err);
   }
 }
 
 /**
- * 【トリガー: 毎朝】当日0:00以降のログを走査して生存判定する。
+ * 朝の時間帯に初めて使用を確認したとき、家族へ1通だけ通知する（本命の通知）。
+ * - 当日すでに通知済みなら送らない（つけ消ししても連投しない）
+ * - NOTIFY_FROM_HOUR〜NOTIFY_TO_HOUR の範囲外では送らない（深夜通知の防止）
+ * - 送信に成功したときだけ日付を記録するため、LINE側の障害時は次のポーリングで再試行される
+ * - 観察期間中（OBSERVATION_MODE=true）は送らない
+ */
+function notifyFirstUseIfNeeded_(config, powerW, now) {
+  if (config.observationMode) return;
+  if (powerW < config.powerThreshold) return;
+
+  const hour = now.getHours();
+  if (hour < config.notifyFromHour || hour >= config.notifyToHour) return;
+
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy-MM-dd');
+  if (props.getProperty(LAST_ON_NOTIFIED_KEY_) === today) return;
+
+  const timeLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
+  const sent = pushLine_('☀️ 今朝 ' + timeLabel + ' に' + config.applianceName +
+    'の使用を確認しました。');
+  if (sent) {
+    props.setProperty(LAST_ON_NOTIFIED_KEY_, today);
+  }
+}
+
+/**
+ * 【トリガー: 毎朝（NOTIFY_TO_HOUR と同時刻）】朝の使用確認通知が出なかった日を拾う
+ * セーフティネット。当日0:00以降のログを走査して判定する。
  * - ログ0件            → システム異常としてLINE通知（回線断・停電・GAS障害の切り分け文言付き）
  * - 使用形跡なし        → 見守りアラートをLINE通知（①電話 → ②訪問の手順文言付き）
- * - 使用形跡あり        → 何もしない（正常時は静かに）
+ * - 使用形跡あり        → 何もしない（朝の使用確認通知が既に出ているため）
+ *
+ * 本命は collectPower 内の朝の使用確認通知で、こちらは「毎朝の通知が来ないことに
+ * 家族が気づけない」というハートビート方式の弱点を埋めるためにある。
  *
  * 判定時刻はトリガー設定側で決める（観察期間のログから決定する）。通知文の時間帯は
  * 実行時刻から生成するため、トリガー時刻を変えてもコードの修正は不要。
@@ -67,6 +107,10 @@ function collectPower() {
 function morningCheck() {
   try {
     const config = getConfig_();
+    if (config.observationMode) {
+      console.log('観察期間中（OBSERVATION_MODE=true）のため通知しません');
+      return;
+    }
     // スクリプトのタイムゾーンは Asia/Tokyo のため、当日0:00 = JSTの0:00になる
     const now = new Date();
     const todayStart = new Date(now);
@@ -86,8 +130,9 @@ function morningCheck() {
     const used = todayRows.some((row) => Number(row[1]) >= config.powerThreshold);
     if (!used) {
       const nowLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
-      pushLine_('🔔【見守りアラート】今朝はまだ' + config.applianceName +
-        'の使用が確認できていません（0:00〜' + nowLabel + '）。\n' +
+      pushLine_('🔔【見守りアラート】今朝は' + config.applianceName +
+        'の使用を確認できませんでした（0:00〜' + nowLabel + '）。\n' +
+        '朝の使用確認の通知も届いていません。\n' +
         '念のため様子を確認してください。\n' +
         '対応手順: ①まず電話をかける → ②30分以内に連絡がつかなければ訪問する');
     }
@@ -104,6 +149,10 @@ function morningCheck() {
 function weeklySummary() {
   try {
     const config = getConfig_();
+    if (config.observationMode) {
+      console.log('観察期間中（OBSERVATION_MODE=true）のため通知しません');
+      return;
+    }
     const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const usedDays = new Set(

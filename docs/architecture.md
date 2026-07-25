@@ -29,13 +29,26 @@ flowchart TD
 
 | 関数 | トリガー | 役割 |
 |---|---|---|
-| `collectPower` | 30分ごと（短時間稼働の家電なら10分ごと） | プラグの電力値を取得し `log` シートへ追記 |
-| `morningCheck` | 毎日 朝（観察期間のログから決定。初期値 10〜11時） | 当日0:00以降のログで生存判定。異常時のみLINE通知 |
+| `collectPower` | 10分ごと | プラグの電力値を取得し `log` シートへ追記。朝の時間帯に初めて使用を確認したら家族へ1通通知（**本命の通知**） |
+| `morningCheck` | 毎日 `NOTIFY_TO_HOUR` と同時刻（観察期間のログから決定。初期値 10〜11時） | 当日0:00以降のログを走査し、使用が確認できなければアラート（**セーフティネット**） |
 | `weeklySummary` | 日曜 20〜21時 | 週次サマリーを1通送信し、30日超の古いログを削除 |
 
-観察期間中は `collectPower` のみを登録し、しきい値と判定時刻を実測で決めたうえで残り2件を追加する（[README](../README.md#観察期間--しきい値と判定時刻を実測で決める) 参照）。
+観察期間中は `OBSERVATION_MODE=true` を設定し、`collectPower` のみを登録する。しきい値と通知時間帯を実測で決めたうえでフラグを外し、残り2件を追加する（[README](../README.md#観察期間--しきい値と判定時刻を実測で決める) 参照）。
 
-## シーケンス: 電力記録（collectPower・30分ごと）
+## 通知の設計
+
+ハートビート型（通知＝正常）とデッドマンスイッチ型（沈黙＝正常）を組み合わせている。
+
+| # | 通知 | 役割 | 出るタイミング |
+|---|---|---|---|
+| 1 | 朝の使用確認 | 本命 | `collectPower` が朝の時間帯に初めてしきい値超えを観測したとき（1日1通） |
+| 2 | 見守りアラート | セーフティネット | `morningCheck` の時点で当日の使用形跡がないとき |
+| 3 | システム異常 | 死活監視 | `morningCheck` の時点で当日のログが0件のとき |
+| 4 | 週次サマリー | 死活監視 | 日曜20時 |
+
+1だけでは「毎朝の通知が来ないことに家族が気づけない」ため、2で補っている。逆に2だけ（デッドマンスイッチ単独）では、家電を使わない日に必ず誤報が出る。両者を併用することで、誤報を抑えながら見落としも防ぐ設計にしている。
+
+## シーケンス: 電力記録と朝の使用確認通知（collectPower・10分ごと）
 
 ```mermaid
 sequenceDiagram
@@ -43,8 +56,9 @@ sequenceDiagram
     participant G as GAS (collectPower)
     participant S as SwitchBot API v1.1
     participant L as スプレッドシート(log)
+    participant N as LINEグループ
 
-    T->>G: 30分ごとに起動
+    T->>G: 10分ごとに起動
     G->>G: 署名生成<br>sign = Base64(HMAC-SHA256(secret, token+t+nonce)).toUpperCase()
     G->>S: GET /devices/{deviceId}/status<br>(Authorization, sign, t, nonce)
     alt HTTPエラー / タイムアウト
@@ -54,9 +68,18 @@ sequenceDiagram
     S-->>G: 200 OK { statusCode: 100, body: { weight, electricityOfDay } }
     Note over G: statusCode ≠ 100 なら例外<br>（HTTP 200でもAPI失敗があり得る）
     G->>L: appendRow([now, weight, electricityOfDay])
+
+    alt weight ≥ POWER_THRESHOLD かつ<br>NOTIFY_FROM_HOUR ≤ 時 < NOTIFY_TO_HOUR かつ<br>当日未通知 かつ OBSERVATION_MODE=false
+        G->>N: ☀️ 今朝 HH:mm に{家電}の使用を確認しました
+        Note over G: 送信成功時のみ<br>LAST_ON_NOTIFIED_DATE を更新<br>（失敗時は次のポーリングで再試行）
+    else それ以外
+        Note over G,N: 通知しない
+    end
 ```
 
-## シーケンス: 朝の生存判定（morningCheck・毎朝）
+朝の使用確認通知は「立ち上がりの検知」ではなく「**当日の通知時間帯に初めてしきい値を超えた観測**」で判定している。直前の行と比較する方式にしないのは、ログの欠測やポーリングの取りこぼしに影響されないようにするため。日付をまたいだ判定は `LAST_ON_NOTIFIED_DATE` の一致比較だけで済む。
+
+## シーケンス: セーフティネット（morningCheck・毎朝）
 
 ```mermaid
 sequenceDiagram
@@ -65,7 +88,7 @@ sequenceDiagram
     participant L as スプレッドシート(log)
     participant N as LINEグループ
 
-    T->>G: 設定した判定時刻に起動
+    T->>G: NOTIFY_TO_HOUR と同時刻に起動
     G->>L: 当日0:00(JST)以降の行を走査
     L-->>G: 当日のログ行
 
@@ -74,7 +97,7 @@ sequenceDiagram
     else power_w ≥ POWER_THRESHOLD の行が0件
         G->>N: 🔔 見守りアラート<br>(APPLIANCE_NAME + 実行時刻から文面生成)<br>(①電話 → ②訪問 の対応手順)
     else 使用形跡あり
-        Note over G,N: 正常。通知しない（アラート疲れ対策）
+        Note over G,N: 朝の使用確認通知が既に出ているため<br>ここでは通知しない
     end
 ```
 
@@ -103,15 +126,23 @@ sequenceDiagram
 - **LINE送信自体の失敗**: 通知ループを避けるため例外にせず、実行ログに残すのみ（`muteHttpExceptions: true` + try/catch）。
 - **設定不備**: `validateConfig_()` が不足しているスクリプトプロパティ名を列挙して例外を投げるため、セットアップ漏れが実行ログから即座に分かる。`POWER_THRESHOLD` は必須プロパティとして扱い、値が正の数でない場合も例外にする。
 
-## しきい値と判定時刻の決定方針
+## しきい値と通知時間帯の決定方針
 
-`POWER_THRESHOLD` と `morningCheck` の判定時刻は、コード側にもドキュメント側にも「推奨値」を持たせない設計にしている。この2つは見守り対象の家電と本人の生活パターンに完全に依存し、汎用的な正解が存在しないためである。
+`POWER_THRESHOLD` と通知時間帯は、コード側にもドキュメント側にも「推奨値」を持たせない設計にしている。見守り対象の家電と本人の生活パターンに完全に依存し、汎用的な正解が存在しないためである。
 
 そのため `POWER_THRESHOLD` はデフォルト値を持たない必須プロパティとした。既定値があると「設定しなくても動く」と誤読され、本人の生活に合っていないしきい値のまま静かに稼働し続けてしまう。未設定なら `collectPower` を含む全ジョブが起動直後に例外で止まり、セットアップ漏れが必ず表面化する。
 
-判定時刻はトリガー設定のみで決まる。見守りアラートの文面に含める時間帯表記は実行時刻（`Utilities.formatDate`）から生成するため、トリガー時刻を変更してもコードは修正不要。
+`NOTIFY_FROM_HOUR` / `NOTIFY_TO_HOUR` には既定値（5〜11時）を持たせている。しきい値と違い、外れていても「通知が来ない」という安全側の失敗になり、`morningCheck` のアラートで拾えるためである。ただし観察期間のログから調整することを前提としている。
+
+`morningCheck` の判定時刻はトリガー設定のみで決まる。`NOTIFY_TO_HOUR` と同じ時刻に揃える必要があり、ずれると「朝の通知も来ないがアラートも出ない」空白時間が生じる。見守りアラートの文面に含める時間帯表記は実行時刻（`Utilities.formatDate`）から生成するため、トリガー時刻を変更してもコードは修正不要。
 
 対象家電の名称は `APPLIANCE_NAME`（任意、省略時 `家電`）で通知文に差し込む。家電を差し替えてもコード変更が不要な構成にしている。
+
+## 観察期間の通知抑止
+
+`collectPower` が朝の使用確認通知も担当するため、観察期間中にトリガーを登録すると暫定しきい値のまま通知が飛んでしまう。これを避けるため `OBSERVATION_MODE`（`true` のとき全通知を抑止）を用意している。3ジョブすべてが起動直後にこのフラグを確認する。
+
+トリガーを登録しないことで通知を止める方式にはしていない。`collectPower` は観察期間中も回し続ける必要があるためである。
 
 ## データ保持
 

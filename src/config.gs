@@ -20,6 +20,13 @@ const REQUIRED_PROPERTIES_ = [
 const DEFAULT_APPLIANCE_NAME_ = '家電';
 
 /**
+ * 朝の使用確認通知を送る時間帯（時）。この範囲外で使用を検知しても通知しない。
+ * 深夜にトイレのついでにテレビをつけた、といったケースで家族を起こさないための制限。
+ */
+const DEFAULT_NOTIFY_FROM_HOUR_ = 5;
+const DEFAULT_NOTIFY_TO_HOUR_ = 11;
+
+/**
  * 必須プロパティがすべて設定されているか検証する。
  * 不足がある場合は、どのプロパティが不足しているかを列挙した例外を投げる。
  */
@@ -38,10 +45,24 @@ function validateConfig_() {
 }
 
 /**
+ * 0〜23の整数（時）を表すプロパティを読む。未設定なら既定値を返す。
+ */
+function readHourProperty_(props, key, defaultValue) {
+  const raw = (props.getProperty(key) || '').trim();
+  if (raw === '') return defaultValue;
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error(key + ' には0〜23の整数を設定してください（現在の値: ' + raw + '）');
+  }
+  return hour;
+}
+
+/**
  * 設定一式を取得する。必須プロパティが不足していれば例外を投げる。
  * @return {{switchbotToken: string, switchbotSecret: string, lineToken: string,
  *           lineGroupId: string, plugDeviceId: string, powerThreshold: number,
- *           applianceName: string}}
+ *           applianceName: string, notifyFromHour: number, notifyToHour: number,
+ *           observationMode: boolean}}
  */
 function getConfig_() {
   validateConfig_();
@@ -57,6 +78,17 @@ function getConfig_() {
 
   const applianceName = (props.getProperty('APPLIANCE_NAME') || '').trim();
 
+  const notifyFromHour = readHourProperty_(props, 'NOTIFY_FROM_HOUR', DEFAULT_NOTIFY_FROM_HOUR_);
+  const notifyToHour = readHourProperty_(props, 'NOTIFY_TO_HOUR', DEFAULT_NOTIFY_TO_HOUR_);
+  if (notifyFromHour >= notifyToHour) {
+    throw new Error('NOTIFY_FROM_HOUR は NOTIFY_TO_HOUR より小さい値にしてください' +
+      '（現在: ' + notifyFromHour + '〜' + notifyToHour + '）');
+  }
+
+  // 観察期間中は通知を一切出さずログ収集だけを行う（暫定しきい値での誤通知を防ぐ）
+  const observationMode =
+    (props.getProperty('OBSERVATION_MODE') || '').trim().toLowerCase() === 'true';
+
   return {
     switchbotToken: props.getProperty('SWITCHBOT_TOKEN').trim(),
     switchbotSecret: props.getProperty('SWITCHBOT_SECRET').trim(),
@@ -65,5 +97,8 @@ function getConfig_() {
     plugDeviceId: props.getProperty('PLUG_DEVICE_ID').trim(),
     powerThreshold: threshold,
     applianceName: applianceName || DEFAULT_APPLIANCE_NAME_,
+    notifyFromHour: notifyFromHour,
+    notifyToHour: notifyToHour,
+    observationMode: observationMode,
   };
 }
