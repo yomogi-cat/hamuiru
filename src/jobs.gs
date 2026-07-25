@@ -11,6 +11,12 @@ const LOG_KEEP_DAYS_ = 30;
 const LAST_ON_NOTIFIED_KEY_ = 'LAST_ON_NOTIFIED_DATE';
 
 /**
+ * 試作運用モードで直前に観測したON/OFF状態（'on' / 'off'）を記録する
+ * スクリプトプロパティ名。手で設定するものではない。
+ */
+const LAST_POWER_STATE_KEY_ = 'LAST_POWER_STATE';
+
+/**
  * ログ用シートを取得する。存在しなければ見出し行付きで作成する。
  * ※ このスクリプトはスプレッドシートにバインドされている前提（拡張機能 → Apps Script から作成）。
  */
@@ -51,7 +57,7 @@ function notifyJobError_(jobName, err) {
 
 /**
  * 【トリガー: 10分ごと】プラグの電力値を取得してシート log に追記し、
- * 朝の時間帯に初めて使用を確認したら家族へ1通通知する。
+ * モードに応じた通知を出す。
  */
 function collectPower() {
   try {
@@ -59,9 +65,59 @@ function collectPower() {
     const status = getPlugStatus_();
     const now = new Date();
     getLogSheet_().appendRow([now, status.weight, status.electricityOfDay]);
-    notifyFirstUseIfNeeded_(config, status.weight, now);
+    notifyPowerIfNeeded_(config, status.weight, now);
   } catch (err) {
     notifyJobError_('collectPower（電力記録）', err);
+  }
+}
+
+/**
+ * 記録した電力値に応じて通知を出す。モードによって挙動が変わる。
+ * - OBSERVATION_MODE=true : 通知しない（観察期間。ログ収集のみ）
+ * - TRIAL_MODE=true       : ON/OFFの変化を都度通知（試作運用。生活パターンの把握）
+ * - どちらもなし（本番）   : 朝の時間帯の初回使用を1日1通だけ通知
+ *
+ * OBSERVATION_MODE を優先するのは、通知を完全に止めたい状態が最も強い意図だから。
+ */
+function notifyPowerIfNeeded_(config, powerW, now) {
+  if (config.observationMode) return;
+  if (config.trialMode) {
+    notifyStateChangeIfNeeded_(config, powerW, now);
+    return;
+  }
+  notifyFirstUseIfNeeded_(config, powerW, now);
+}
+
+/**
+ * 【試作運用モード】ON/OFFが切り替わったタイミングで都度通知する。
+ *
+ * 本番の「朝1通」と違い、生活パターンそのものを家族が把握するためのモード。
+ * この通知を数日眺めることで、対象家電が夜間もつけっぱなしになっていないか
+ * （＝朝の初回検知が「起きた」を意味するか）を確認できる。OFF通知が来なければ
+ * つけっぱなしであり、本番の判定方式を見直す必要があると分かる。
+ *
+ * 状態は送信の成否に関わらず記録する。朝の使用確認通知（送信成功時のみ記録）と
+ * 逆の方針なのは、送れなかった変化を次のポーリングで再通知すると、実際とずれた
+ * 時刻の通知が延々と続いてしまうため。
+ */
+function notifyStateChangeIfNeeded_(config, powerW, now) {
+  const props = PropertiesService.getScriptProperties();
+  const current = powerW >= config.powerThreshold ? 'on' : 'off';
+  const previous = props.getProperty(LAST_POWER_STATE_KEY_);
+  if (previous === current) return;
+
+  props.setProperty(LAST_POWER_STATE_KEY_, current);
+  if (!previous) {
+    console.log('試作運用モード: 初回の状態を ' + current + ' として記録しました（通知はしません）');
+    return;
+  }
+
+  const timeLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
+  if (current === 'on') {
+    pushLine_('🔌 ' + timeLabel + ' ' + config.applianceName + 'がONになりました（' +
+      Math.round(powerW) + 'W）');
+  } else {
+    pushLine_('⚫ ' + timeLabel + ' ' + config.applianceName + 'がOFFになりました');
   }
 }
 
@@ -107,8 +163,9 @@ function notifyFirstUseIfNeeded_(config, powerW, now) {
 function morningCheck() {
   try {
     const config = getConfig_();
-    if (config.observationMode) {
-      console.log('観察期間中（OBSERVATION_MODE=true）のため通知しません');
+    if (config.observationMode || config.trialMode) {
+      console.log('観察期間中または試作運用中のため通知しません' +
+        '（OBSERVATION_MODE / TRIAL_MODE を確認してください）');
       return;
     }
     // スクリプトのタイムゾーンは Asia/Tokyo のため、当日0:00 = JSTの0:00になる
@@ -149,8 +206,9 @@ function morningCheck() {
 function weeklySummary() {
   try {
     const config = getConfig_();
-    if (config.observationMode) {
-      console.log('観察期間中（OBSERVATION_MODE=true）のため通知しません');
+    if (config.observationMode || config.trialMode) {
+      console.log('観察期間中または試作運用中のため通知しません' +
+        '（OBSERVATION_MODE / TRIAL_MODE を確認してください）');
       return;
     }
     const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);

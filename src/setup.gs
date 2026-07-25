@@ -3,7 +3,8 @@
 //
 // 手動実行の順序:
 //   1. setupObservationTriggers  観察期間の開始（OBSERVATION_MODE=true が必要）
-//   2. setupTriggers             本運用の開始（OBSERVATION_MODE を外してから）
+//   2. setupTrialTriggers        試作運用の開始（TRIAL_MODE=true が必要）
+//   3. setupTriggers             本運用の開始（両フラグを外してから）
 // 確認・やり直し用: showTriggers / deleteAllTriggers
 
 /** このプロジェクトがトリガーを登録する対象の関数名 */
@@ -59,6 +60,42 @@ function setupObservationTriggers() {
 }
 
 /**
+ * 【試作運用用・手動実行】collectPower だけを登録する。
+ *
+ * 試作運用では対象家電のON/OFFを都度通知し、生活パターンを家族が把握する。
+ * 通知量が増えるため、数日〜1週間程度の期間限定で使うことを想定している
+ * （LINE Messaging API の無料枠は月200通）。
+ */
+function setupTrialTriggers() {
+  const config = getConfig_();
+  if (config.observationMode) {
+    throw new Error(
+      'OBSERVATION_MODE が true です。試作運用を始めるには OBSERVATION_MODE を削除し、' +
+      'TRIAL_MODE=true を設定してください（OBSERVATION_MODE が優先され通知が出ません）'
+    );
+  }
+  if (!config.trialMode) {
+    throw new Error(
+      '試作運用を始めるには、先にスクリプトプロパティ TRIAL_MODE=true を設定してください'
+    );
+  }
+
+  deleteManagedTriggers_();
+  ScriptApp.newTrigger('collectPower').timeBased()
+    .everyMinutes(COLLECT_INTERVAL_MINUTES_).create();
+
+  console.log('試作運用のトリガーを登録しました: collectPower（' +
+    COLLECT_INTERVAL_MINUTES_ + '分ごと）');
+  console.log(config.applianceName + 'のON/OFFが切り替わるたびに通知します' +
+    '（しきい値 ' + config.powerThreshold + 'W）');
+  console.log('注意: 通知量が増えます。LINEの無料枠は月200通なので、数日〜1週間で' +
+    '本運用に移行してください');
+  console.log('OFF通知が来ない場合は対象家電がつけっぱなしです。' +
+    '朝の初回検知が「起きた」を意味しないため、本運用の判定方式を見直してください');
+  showTriggers();
+}
+
+/**
  * 【本運用用・手動実行】3件のトリガーを登録する。
  *
  * morningCheck の時刻は NOTIFY_TO_HOUR から自動で決める。この2つがずれると
@@ -72,6 +109,13 @@ function setupTriggers() {
       'OBSERVATION_MODE が true のままです。本運用を開始する前にスクリプトプロパティから' +
       '削除（または false に）してください。true のままだと通知が一切飛ばず、しかも' +
       'このシステムは「通知が来ない」ことを異常のサインにしているため気づけません'
+    );
+  }
+  if (config.trialMode) {
+    throw new Error(
+      'TRIAL_MODE が true のままです。本運用を開始する前にスクリプトプロパティから' +
+      '削除（または false に）してください。true のままだとON/OFFの都度通知が続き、' +
+      '朝の使用確認通知と見守りアラートが出ません'
     );
   }
 

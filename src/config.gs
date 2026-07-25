@@ -62,7 +62,7 @@ function readHourProperty_(props, key, defaultValue) {
  * @return {{switchbotToken: string, switchbotSecret: string, lineToken: string,
  *           lineGroupId: string, plugDeviceId: string, powerThreshold: number,
  *           applianceName: string, notifyFromHour: number, notifyToHour: number,
- *           observationMode: boolean}}
+ *           observationMode: boolean, trialMode: boolean}}
  */
 function getConfig_() {
   validateConfig_();
@@ -89,6 +89,10 @@ function getConfig_() {
   const observationMode =
     (props.getProperty('OBSERVATION_MODE') || '').trim().toLowerCase() === 'true';
 
+  // 試作運用中はON/OFFの変化を都度通知し、生活パターンそのものを家族が把握する
+  const trialMode =
+    (props.getProperty('TRIAL_MODE') || '').trim().toLowerCase() === 'true';
+
   return {
     switchbotToken: props.getProperty('SWITCHBOT_TOKEN').trim(),
     switchbotSecret: props.getProperty('SWITCHBOT_SECRET').trim(),
@@ -100,5 +104,6 @@ function getConfig_() {
     notifyFromHour: notifyFromHour,
     notifyToHour: notifyToHour,
     observationMode: observationMode,
+    trialMode: trialMode,
   };
 }
