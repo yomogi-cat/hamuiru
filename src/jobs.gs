@@ -16,6 +16,16 @@ const LAST_ON_NOTIFIED_KEY_ = 'LAST_ON_NOTIFIED_DATE';
  */
 const LAST_POWER_STATE_KEY_ = 'LAST_POWER_STATE';
 
+/** ジョブごとのエラー通知時刻を記録するスクリプトプロパティ名の接頭辞 */
+const ERROR_NOTIFIED_KEY_PREFIX_ = 'LAST_ERROR_NOTIFIED_';
+
+/**
+ * 同じジョブのエラー通知を送る最短間隔（分）。
+ * collectPower は10分ごとに動くため、間引きがないと障害中に1日144通が飛び、
+ * LINEの無料枠（月200通）を1日半で使い切って本来のアラートが送れなくなる。
+ */
+const ERROR_NOTIFY_INTERVAL_MINUTES_ = 60;
+
 /**
  * ログ用シートを取得する。存在しなければ見出し行付きで作成する。
  * ※ このスクリプトはスプレッドシートにバインドされている前提（拡張機能 → Apps Script から作成）。
@@ -47,12 +57,37 @@ function getLogRows_() {
 /**
  * ジョブ内の想定外エラーをLINEへ通知する。通知ループを避けるため、
  * pushLine_ の失敗は例外にならずログに残るのみ。
+ *
+ * 同じジョブのエラー通知は ERROR_NOTIFY_INTERVAL_MINUTES_ に1通までに間引く。
+ * SwitchBot APIの障害やプラグのオフラインが続くと、10分ごとに同じ通知が
+ * 飛んでLINEの無料枠を焼き切ってしまうため。実行ログには毎回残す。
+ *
+ * 送信に成功したときだけ時刻を記録するので、LINE側が復旧したタイミングで
+ * 1通は必ず届く。
  */
 function notifyJobError_(jobName, err) {
+  // ログは間引かない。障害の全期間を実行ログで追えるようにする
   console.error(jobName + ' でエラー: ' + err + (err && err.stack ? '\n' + err.stack : ''));
-  pushLine_('⚠️【システムエラー】' + jobName + ' の実行中にエラーが発生しました。\n' +
+
+  const props = PropertiesService.getScriptProperties();
+  // プロパティ名に使えるようジョブ名から関数名部分だけを取り出す（例: collectPower）
+  const key = ERROR_NOTIFIED_KEY_PREFIX_ + jobName.replace(/[^A-Za-z0-9_]/g, '');
+  const lastNotifiedAt = Number(props.getProperty(key));
+  const now = Date.now();
+  if (lastNotifiedAt && now - lastNotifiedAt < ERROR_NOTIFY_INTERVAL_MINUTES_ * 60 * 1000) {
+    console.log('同じジョブのエラー通知は' + ERROR_NOTIFY_INTERVAL_MINUTES_ +
+      '分に1通までのため、LINEへは送信しません（前回送信: ' +
+      Utilities.formatDate(new Date(lastNotifiedAt), 'Asia/Tokyo', 'MM/dd HH:mm') + '）');
+    return;
+  }
+
+  const sent = pushLine_('⚠️【システムエラー】' + jobName + ' の実行中にエラーが発生しました。\n' +
     '概要: ' + String(err).slice(0, 200) + '\n' +
-    'GASエディタの実行ログを確認してください。');
+    'GASエディタの実行ログを確認してください。\n' +
+    '（同じエラーの通知は' + ERROR_NOTIFY_INTERVAL_MINUTES_ + '分に1通までに抑えています）');
+  if (sent) {
+    props.setProperty(key, String(now));
+  }
 }
 
 /**
