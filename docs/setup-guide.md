@@ -270,6 +270,7 @@ GASエディタでファイルを5つ作り、`src/` の同名ファイルの内
 | **通知が一切来ない**（ログは溜まっている） | `OBSERVATION_MODE` が `true` のまま。Phase 8の手順1で削除し、`setupTriggers` を実行し直す |
 | ON/OFF通知が延々と続く | `TRIAL_MODE` が `true` のまま。Phase 8で削除する。LINEの無料枠を使い切る前に対応する |
 | 試作運用でON通知だけ来てOFF通知が来ない | 対象家電がつけっぱなし。この家電では「朝の初回検知＝起きた」が成立しないため、Phase 1に戻って選び直す |
+| 本運用で「🌙 昨夜から消されていません」が届く | 深夜帯（0:00〜`NOTIFY_FROM_HOUR`）に一度もオフになっていない。その日は起床の確認ができていないため様子を確認する。**毎日届くなら対象家電が不適格**なのでPhase 1に戻る |
 | 試作運用で通知が来ない（初回） | 初回のポーリングは基準となる状態を記録するだけで通知しません。次に状態が変わったときから通知されます |
 | `clasp push` が権限エラー | [Apps Script API](https://script.google.com/home/usersettings) がOFF。ONにして再実行する |
 | `clasp deploy` したWebアプリが403を返す | `src/appsscript.json` の `webapp` セクションが反映されていない。`clasp push` を先に実行してからデプロイし直す |

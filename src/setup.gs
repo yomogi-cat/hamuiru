@@ -10,8 +10,8 @@
 /** このプロジェクトがトリガーを登録する対象の関数名 */
 const TRIGGER_FUNCTIONS_ = ['collectPower', 'morningCheck', 'weeklySummary'];
 
-/** 電力記録の実行間隔（分）。GASが受け付ける値は 1/5/10/15/30 のいずれか */
-const COLLECT_INTERVAL_MINUTES_ = 10;
+// 電力記録の実行間隔（COLLECT_INTERVAL_MINUTES_）は jobs.gs で定義している。
+// collectPower 側でも「深夜帯に期待される記録件数」の算出に使うため。
 
 /** 週次サマリーを送る時刻（時） */
 const WEEKLY_SUMMARY_HOUR_ = 20;

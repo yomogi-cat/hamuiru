@@ -5,6 +5,12 @@ const LOG_SHEET_NAME_ = 'log';
 const LOG_KEEP_DAYS_ = 30;
 
 /**
+ * collectPower の実行間隔（分）。GASが受け付ける値は 1/5/10/15/30 のいずれか。
+ * setup.gs のトリガー登録と、深夜帯に期待される記録件数の算出の両方で使う。
+ */
+const COLLECT_INTERVAL_MINUTES_ = 10;
+
+/**
  * 朝の使用確認通知を送った日付（yyyy-MM-dd）を記録するスクリプトプロパティ名。
  * 手で設定するものではなく、スクリプトが自動で書き込む。
  */
@@ -158,11 +164,48 @@ function notifyStateChangeIfNeeded_(config, powerW, now) {
 }
 
 /**
+ * 深夜帯（当日0:00〜NOTIFY_FROM_HOUR）に対象家電が消された形跡があるかを判定する。
+ *
+ * 夜通しつけっぱなしだと、朝の初回検知は「本人が起きた」ことを意味しない。
+ * その場合は通知文を差し替えて、家族に「今日は起床の確認ができていない」と伝える。
+ *
+ * ログの欠測で誤判定しないよう、深夜帯の記録が想定件数の半分未満なら判定しない。
+ * 回線断そのものは morningCheck のシステム異常通知が拾う。
+ *
+ * @return {boolean} 夜通しつけっぱなしだったと判定できる場合のみ true
+ */
+function wasOnAllNight_(config, now) {
+  const nightStart = new Date(now);
+  nightStart.setHours(0, 0, 0, 0);
+  const nightEnd = new Date(now);
+  nightEnd.setHours(config.notifyFromHour, 0, 0, 0);
+
+  const nightRows = getLogRows_()
+    .filter((row) => row[0] >= nightStart && row[0] < nightEnd);
+
+  // 10分ごとの記録を前提に、深夜帯に期待される件数の半分は必要とする
+  const expected = config.notifyFromHour * 60 / COLLECT_INTERVAL_MINUTES_;
+  if (nightRows.length < expected / 2) {
+    console.log('深夜帯の記録が ' + nightRows.length + '件（期待 ' + expected +
+      '件）しかないため、つけっぱなしの判定は行いません');
+    return false;
+  }
+
+  return nightRows.every((row) => Number(row[1]) >= config.powerThreshold);
+}
+
+/**
  * 朝の時間帯に初めて使用を確認したとき、家族へ1通だけ通知する（本命の通知）。
  * - 当日すでに通知済みなら送らない（つけ消ししても連投しない）
  * - NOTIFY_FROM_HOUR〜NOTIFY_TO_HOUR の範囲外では送らない（深夜通知の防止）
  * - 送信に成功したときだけ日付を記録するため、LINE側の障害時は次のポーリングで再試行される
  * - 観察期間中（OBSERVATION_MODE=true）は送らない
+ * - 夜通しつけっぱなしだった場合は通知文を差し替える（下記）
+ *
+ * つけっぱなしの日に「使用を確認しました」を送ると、起床していないのに正常な通知が
+ * 届くことになり、家族はそれに気づけない。同じ1通の枠で別の文面を送ることで、
+ * 「この日は起床の確認になっていない」を必ず伝える。追加通知にしないのは、
+ * 「使用を確認」と「実は夜通しついていた」が別々に届くと混乱するため。
  */
 function notifyFirstUseIfNeeded_(config, powerW, now) {
   if (config.observationMode) return;
@@ -176,8 +219,14 @@ function notifyFirstUseIfNeeded_(config, powerW, now) {
   if (props.getProperty(LAST_ON_NOTIFIED_KEY_) === today) return;
 
   const timeLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
-  const sent = pushLine_('☀️ 今朝 ' + timeLabel + ' に' + config.applianceName +
-    'の使用を確認しました。');
+  const message = wasOnAllNight_(config, now)
+    ? '🌙 今朝 ' + timeLabel + ' の時点で' + config.applianceName +
+      'がついていました（昨夜から消されていません）。\n' +
+      '消さずに寝た可能性がありますが、念のため様子を確認してください。\n' +
+      '※この日は起床の確認ができていません。'
+    : '☀️ 今朝 ' + timeLabel + ' に' + config.applianceName + 'の使用を確認しました。';
+
+  const sent = pushLine_(message);
   if (sent) {
     props.setProperty(LAST_ON_NOTIFIED_KEY_, today);
   }
